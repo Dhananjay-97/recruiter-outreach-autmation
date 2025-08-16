@@ -1,6 +1,4 @@
 import argparse
-import os
-
 import pandas as pd
 
 from outreach import OutreachManager

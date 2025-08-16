@@ -1,8 +1,8 @@
-Dear {{ recruiter_name }},
+Dear {recruiter_name},
 
 I hope this message finds you well.
 
-My name is Dhananjay Lokhande, and I am writing to seek your assistance in finding a suitable job opportunity within **{{ company_name }}** that aligns with my skills and experience. I am confident that I would be a valuable addition to the team, as I bring strong work ethics, a positive attitude, and a collaborative spirit to every project I undertake.
+My name is Dhananjay Lokhande, and I am writing to seek your assistance in finding a suitable job opportunity within **{company_name}** that aligns with my skills and experience. I am confident that I would be a valuable addition to the team, as I bring strong work ethics, a positive attitude, and a collaborative spirit to every project I undertake.
 
 I have over 3 years of experience in AI/ML, GenAI, and backend development, specializing in Python, FastAPI, and LLM integrations, and I take pride in being a reliable team player with a proven track record of delivering results.
 

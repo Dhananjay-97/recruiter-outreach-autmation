@@ -9,3 +9,5 @@ recruiters_list.csv
 
 # Custom ignored directory
 reach/
+
+*.pdf
