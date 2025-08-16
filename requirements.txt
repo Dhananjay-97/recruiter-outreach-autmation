@@ -1,0 +1,4 @@
+requests
+smtplib
+pandas
+dotenv
