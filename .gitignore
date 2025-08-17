@@ -8,6 +8,6 @@ __pycache__/
 recruiters_list.csv
 
 # Custom ignored directory
-reach/
+rouge/
 
 *.pdf

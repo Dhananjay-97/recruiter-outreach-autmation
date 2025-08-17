@@ -1,4 +1,6 @@
-import os  # Import the os module
+
+import concurrent.futures
+import os
 import smtplib
 import time
 from email import encoders
@@ -10,7 +12,6 @@ import pandas as pd
 import pdfplumber
 
 from utils import ConfigLoader, Logger, RateLimiter
-
 
 class OutreachManager:
     """
@@ -45,8 +46,6 @@ class OutreachManager:
     def __init__(self, config=None, logger=None):
         self.config = config or ConfigLoader()
         self.logger = logger or Logger(__name__)
-        self.recruiters = []
-        # Email setup from config
         self.email_user = self.config.get("EMAIL_USER")
         self.email_password = self.config.get("EMAIL_PASSWORD")
         self.smtp_server = self.config.get("SMTP_SERVER", "smtp.gmail.com")
@@ -56,16 +55,22 @@ class OutreachManager:
             period=int(self.config.get("EMAIL_PERIOD", 60))
         )
         self.resume_path = self.config.get("RESUME_PATH")
-        self.template_path = self.config.get("EMAIL_TEMPLATE_PATH", "email_template.md")  # Default template path
+        self.template_path = self.config.get("EMAIL_TEMPLATE_PATH", "email_template.md")
+        self.max_threads = int(self.config.get("MAX_EMAIL_THREADS", 10))
+        self.max_retries = int(self.config.get("MAX_EMAIL_RETRIES", 3))
 
     def load_template(self):
         """Loads the email template from the specified file."""
         try:
             with open(self.template_path, "r", encoding="utf-8") as f:
                 template = f.read()
+            self.logger.info(f"Email template loaded from {self.template_path}")
             return template
         except FileNotFoundError:
             self.logger.error(f"Email template file not found at {self.template_path}")
+            return None
+        except Exception as e:
+            self.logger.error(f"Error loading email template: {e}")
             return None
 
     def load_recruiters(self, file_path):
@@ -88,19 +93,40 @@ class OutreachManager:
         """
         try:
             pdf_path = file_path
-            rows = []
-            first_page = True
+            all_rows = []
+            self.logger.info(f"Loading recruiters from PDF: {pdf_path}")
 
             with pdfplumber.open(pdf_path) as pdf:
-                for page in pdf.pages:
-                    table = page.extract_table()
-                    if table:
-                        if not first_page:
-                            table = table[1:]
-                        rows.extend(table)
-                    first_page = False
+                for i, page in enumerate(pdf.pages):
+                    try:
+                        table = page.extract_table()
+                        if table:
+                            if i > 0:  # Skip header row on subsequent pages
+                                table = table[1:]
 
-            df = pd.DataFrame(rows[1:], columns=['SNo', 'Name', 'Email', 'Title', 'Company'])
+                            for row in table:
+                                if len(row) != 5:  # Expect 5 columns
+                                    self.logger.warning(
+                                        f"Skipping row with incorrect number of columns on page {i+1}: {row}"
+                                    )
+                                    continue
+
+                                email = row[2]  # Email is in the third column
+                                if "@" not in email:
+                                    self.logger.warning(
+                                        f"Skipping row with invalid email format on page {i+1}: {row}"
+                                    )
+                                    continue
+
+                                all_rows.append(row)  # Add the row if it passes validation
+                        self.logger.info(f"Processed page {i+1}/{len(pdf.pages)}")  # Log progress
+
+                    except Exception as e:
+                        self.logger.error(f"Error processing page {i+1}: {e}")
+
+            df = pd.DataFrame(
+                all_rows, columns=["SNo", "Name", "Email", "Title", "Company"]
+            )  # create dataframe after processing all pages.
             df.to_csv("recruiters_list.csv", index=False)
             self.logger.info("Recruiter details extracted and saved to recruiters_list.csv")
             return "recruiters_list.csv"
@@ -115,7 +141,7 @@ class OutreachManager:
             self.logger.error(f"Unexpected error loading recruiters from PDF: {e}")
             return None
 
-    def send_outreach_email(self, hr_email, hr_name, company_name):
+    def send_outreach_email(self, hr_email, hr_name, company_name, max_retries=None):
         """
         Sends an outreach email to a recruiter or HR contact with a personalized message and resume attachment.
 
@@ -138,28 +164,22 @@ class OutreachManager:
         Raises:
             None directly, but logs exceptions encountered during file handling or email sending.
         """
+        if max_retries is None:
+            max_retries = self.max_retries
+
         self.email_rate_limiter.wait()
         subject = "Seeking Assistance for Suitable Job Opportunity & Referral"
-
         template = self.load_template()
         if template is None:
-            return  # Stop if template loading fails
+            return
 
-        # Create a dictionary with the values to replace in the template
-        template_vars = {
-            "recruiter_name": hr_name,
-            "company_name": company_name,
-        }
-
-        # Replace the placeholders in the template with the actual values
-        body = template.format(**template_vars)  # Use .format instead of f-strings
-
+        template_vars = {"recruiter_name": hr_name, "company_name": company_name}
+        body = template.format(**template_vars)
 
         msg = MIMEMultipart()
         msg["From"] = self.email_user
         msg["To"] = hr_email
         msg["Subject"] = subject
-
         msg.attach(MIMEText(body, "plain"))
 
         try:
@@ -167,25 +187,70 @@ class OutreachManager:
                 part = MIMEBase("application", "octet-stream")
                 part.set_payload(attachment.read())
             encoders.encode_base64(part)
-            part.add_header("Content-Disposition", f"attachment; filename={os.path.basename(self.resume_path)}")  # Use os.path.basename
+            part.add_header(
+                "Content-Disposition",
+                f"attachment; filename={os.path.basename(self.resume_path)}",
+            )
             msg.attach(part)
+            self.logger.info(f"Resume attached to email for {hr_email}")
         except FileNotFoundError:
             self.logger.error(f"Resume file not found at {self.resume_path}")
             return
 
-        try:
-            with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
-                server.starttls()
-                server.login(self.email_user, self.email_password)
-                server.sendmail(self.email_user, hr_email, msg.as_string())
+        for attempt in range(max_retries):
+            try:
+                with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
+                    server.starttls()
+                    server.login(self.email_user, self.email_password)
+                    server.sendmail(self.email_user, hr_email, msg.as_string())
 
-            self.logger.info(f"Email sent successfully to {hr_name} ({hr_email})")
-            time.sleep(3)
+                self.logger.info(
+                    f"Email sent successfully to {hr_name} ({hr_email}) after {attempt+1} attempts"
+                )
+                time.sleep(3)  # Keep the delay
+                return  # Email sent successfully, exit retry loop
 
-        except smtplib.SMTPException as e:
-            self.logger.error(f"SMTP error while sending email to {hr_email}: {e}")
-        except OSError as e:
-            self.logger.error(f"OS error while sending email to {hr_email}: {e}")
+            except smtplib.SMTPException as e:
+                self.logger.error(
+                    f"SMTP error while sending email to {hr_email} (attempt {attempt+1}): {e}"
+                )
+                if attempt < max_retries - 1:
+                    time.sleep(2**attempt)  # Exponential backoff
+            except OSError as e:
+                self.logger.error(
+                    f"OS error while sending email to {hr_email} (attempt {attempt+1}): {e}"
+                )
+                if attempt < max_retries - 1:
+                    time.sleep(2**attempt)  # Exponential backoff
+            except Exception as e:
+                self.logger.error(
+                    f"Unexpected error sending email to {hr_email} (attempt {attempt+1}): {e}"
+                )
+                if attempt < max_retries - 1:
+                    time.sleep(2**attempt)
 
-    def track_responses(self):
-        pass
+        self.logger.error(f"Failed to send email to {hr_email} after {max_retries} attempts")
+        
+    def send_emails_concurrently(self, recruiters):
+        """
+        Sends emails concurrently using a thread pool.
+        """
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=self.max_threads
+        ) as executor:
+            futures = []
+            for recruiter in recruiters:
+                hr_email = recruiter["Email"]
+                hr_name = recruiter["Name"].split()[0] if recruiter["Name"] else "HR"
+                company_name = recruiter["Company"] if recruiter["Company"] else "Their Company"
+                self.logger.info(f"Submitting email task for {hr_email}")
+                future = executor.submit(
+                    self.send_outreach_email, hr_email, hr_name, company_name
+                )  # Pass max_retries
+                futures.append(future)
+
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    future.result()  # Raise exceptions if any
+                except Exception as e:
+                    self.logger.error(f"Error sending email: {e}")

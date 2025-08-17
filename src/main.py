@@ -6,6 +6,9 @@ from utils import ConfigLoader, Logger
 
 
 def main():
+    """
+    Main function to orchestrate the recruiter outreach automation.
+    """
     # Initialize argument parser
     parser = argparse.ArgumentParser(description="Recruiter Outreach Automation Script")
     parser.add_argument("pdf_file_path", help="Path to the PDF file containing recruiter data")
@@ -23,16 +26,9 @@ def main():
 
     if recruiters_file:  # Check if loading was successful
         recruiters_df = pd.read_csv(recruiters_file)
-
-        # Send outreach emails to the loaded recruiters
-        for index, recruiter in recruiters_df.iterrows():
-            email = recruiter['Email'] # Use 'Email' as column name
-            name = recruiter['Name'].split()[0] if recruiter['Name'] else "HR" # Get first name
-            company = recruiter['Company'] if recruiter['Company'] else "Their Company" # Get company name
-            outreach_manager.send_outreach_email(email, name, company) # Changed arguments
-
-        # Track responses from the recruiters
-        outreach_manager.track_responses()
+        recruiters = recruiters_df.to_dict("records")
+        logger.info(f"Loaded {len(recruiters)} recruiter records.")
+        outreach_manager.send_emails_concurrently(recruiters)
     else:
         logger.error("Failed to load recruiter data.  Exiting.")
 

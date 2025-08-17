@@ -1,4 +1,3 @@
-# This file is intentionally left blank.
 import logging
 import os
 import time
@@ -20,13 +19,13 @@ class ConfigLoader:
             Returns:
                 str or Any: The value of the environment variable, or the default value if not found.
     """
+
     def __init__(self, dotenv_path=".env"):
         load_dotenv(dotenv_path)
 
     def get(self, key, default=None):
         """
         Retrieve the value of an environment variable.
-
         Args:
             key (str): The name of the environment variable to retrieve.
             default (Any, optional): The value to return if the environment variable is not set. Defaults to None.
@@ -36,14 +35,21 @@ class ConfigLoader:
         """
         return os.getenv(key, default)
 
+
 class Logger:
+    """
+    Logger class for consistent logging.
+    """
+
     def __init__(self, name=__name__, level=logging.INFO):
         self.logger = logging.getLogger(name)
         self.logger.setLevel(level)
         # Add handler to print to console
         ch = logging.StreamHandler()
         ch.setLevel(level)
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        formatter = logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        )
         ch.setFormatter(formatter)
         self.logger.addHandler(ch)
 
@@ -56,7 +62,12 @@ class Logger:
     def error(self, message):
         self.logger.error(message)
 
+
 class RateLimiter:
+    """
+    RateLimiter class to control the rate of API calls.
+    """
+
     def __init__(self, calls_per_period, period):
         self.calls_per_period = calls_per_period
         self.period = period
